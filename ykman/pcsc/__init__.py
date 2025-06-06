@@ -53,7 +53,8 @@ _YKMAN_NO_EXCLUSIVE = "YKMAN_NO_EXLUSIVE"
 # Figure out what the PID should be based on the reader name
 def _pid_from_name(name):
     if YK_READER_NAME not in name.lower():
-        return None
+        # Default to a CCID-only YubiKey PID for non-YubiKey readers
+        return PID.YK4_CCID
 
     interfaces = USB_INTERFACE(0)
     for iface in USB_INTERFACE:
@@ -108,7 +109,8 @@ class ScardYubiKeyDevice(YkmanDevice):
         if YK_READER_NAME in reader.name.lower():
             transport = TRANSPORT.USB
         else:
-            transport = TRANSPORT.NFC
+            # Treat unknown readers as USB devices as well
+            transport = TRANSPORT.USB
         super(ScardYubiKeyDevice, self).__init__(
             transport, reader.name, _pid_from_name(reader.name)
         )
@@ -217,9 +219,15 @@ def list_readers():
 
 
 def list_devices(name_filter=None):
-    name_filter = YK_READER_NAME if name_filter is None else name_filter
+    """List smart card devices.
+
+    By default all available readers are returned.  Supplying ``name_filter``
+    will return only devices whose reader name contains the provided string.
+    """
+
     devices = []
+    nf = name_filter.lower() if name_filter is not None else None
     for reader in list_readers():
-        if name_filter.lower() in reader.name.lower():
+        if nf is None or nf in reader.name.lower():
             devices.append(ScardYubiKeyDevice(reader))
     return devices

@@ -92,7 +92,11 @@ def fido(ctx):
         scp_params = resolve_scp(s_conn)
         conn = SmartCardCtapDevice(s_conn, scp_params)
     else:
-        conn = dev.open_connection(FidoConnection)
+        if dev.supports_connection(FidoConnection):
+            conn = dev.open_connection(FidoConnection)
+        else:
+            s_conn = dev.open_connection(SmartCardConnection)
+            conn = SmartCardCtapDevice(s_conn)
 
     ctx.call_on_close(conn.close)
     ctx.obj["conn"] = conn
