@@ -884,7 +884,7 @@ class PivSession:
         except ApduError as e:
             if e.sw == SW.REFERENCE_DATA_NOT_FOUND:
                 raise NotSupportedError(
-                    "Biometric verification not supported by this YuibKey"
+                    "Biometric verification not supported by this device"
                 )
             retries = _retries_from_sw(e.sw)
             if retries is None:
@@ -907,7 +907,7 @@ class PivSession:
         except ApduError as e:
             if e.sw == SW.REFERENCE_DATA_NOT_FOUND:
                 raise NotSupportedError(
-                    "Biometric verification not supported by this YuibKey"
+                    "Biometric verification not supported by this device"
                 )
             retries = _retries_from_sw(e.sw)
             if retries is None:
@@ -1017,10 +1017,10 @@ class PivSession:
         data = Tlv.parse_dict(
             self.protocol.send_apdu(0, INS_GET_METADATA, 0, SLOT_CARD_MANAGEMENT)
         )
-        policy = data[TAG_METADATA_POLICY]
+        policy = data.get(TAG_METADATA_POLICY, b"\x00\x01")
         return ManagementKeyMetadata(
             MANAGEMENT_KEY_TYPE(data.get(TAG_METADATA_ALGO, b"\x03")[0]),
-            data[TAG_METADATA_IS_DEFAULT] != b"\0",
+            data.get(TAG_METADATA_IS_DEFAULT, b"\0") != b"\0",
             TOUCH_POLICY(policy[INDEX_TOUCH_POLICY]),
         )
 
@@ -1032,14 +1032,26 @@ class PivSession:
         slot = SLOT(slot)
         logger.debug(f"Getting metadata for slot {slot}")
         require_version(self.version, (5, 3, 0))
-        data = Tlv.parse_dict(self.protocol.send_apdu(0, INS_GET_METADATA, 0, slot))
-        policy = data[TAG_METADATA_POLICY]
+        try:
+            data = Tlv.parse_dict(
+                self.protocol.send_apdu(0, INS_GET_METADATA, 0, slot)
+            )
+        except ApduError as e:
+            if e.sw in (SW.INVALID_INSTRUCTION, 0x6A81, 0x6A86):
+                raise NotSupportedError("Slot metadata not supported")
+            raise
+        if TAG_METADATA_ALGO not in data:
+            # Some implementations return success for empty slots instead of the
+            # REFERENCE_DATA_NOT_FOUND error used by YubiKeys.
+            raise ApduError(b"", SW.REFERENCE_DATA_NOT_FOUND)
+
+        policy = data.get(TAG_METADATA_POLICY, b"\x00\x01")
         return SlotMetadata(
             KEY_TYPE(data[TAG_METADATA_ALGO][0]),
             PIN_POLICY(policy[INDEX_PIN_POLICY]),
             TOUCH_POLICY(policy[INDEX_TOUCH_POLICY]),
-            data[TAG_METADATA_ORIGIN][0] == ORIGIN_GENERATED,
-            data[TAG_METADATA_PUBLIC_KEY],
+            data.get(TAG_METADATA_ORIGIN, b"\0")[0] == ORIGIN_GENERATED,
+            data.get(TAG_METADATA_PUBLIC_KEY, b""),
         )
 
     def get_bio_metadata(self) -> BioMetadata:
@@ -1055,14 +1067,18 @@ class PivSession:
                 self.protocol.send_apdu(0, INS_GET_METADATA, 0, SLOT_OCC_AUTH)
             )
         except ApduError as e:
-            if e.sw in (SW.REFERENCE_DATA_NOT_FOUND, SW.INVALID_INSTRUCTION):
+            if e.sw in (
+                SW.REFERENCE_DATA_NOT_FOUND,
+                SW.INVALID_INSTRUCTION,
+                0x6A86,  # Wrong parameters P1-P2 on some implementations
+            ):
                 raise NotSupportedError(
-                    "Biometric verification not supported by this YuibKey"
+                    "Biometric verification not supported by this device"
                 )
             raise
         return BioMetadata(
             1 == data.get(TAG_METADATA_BIO_CONFIGURED, b"\x00")[0],
-            data[TAG_METADATA_RETRIES][0],
+            data.get(TAG_METADATA_RETRIES, b"\x00")[0],
             1 == data.get(TAG_METADATA_TEMPORARY_PIN, b"\x00")[0],
         )
 
@@ -1405,10 +1421,23 @@ class PivSession:
 
     def _get_pin_puk_metadata(self, p2):
         require_version(self.version, (5, 3, 0))
-        data = Tlv.parse_dict(self.protocol.send_apdu(0, INS_GET_METADATA, 0, p2))
-        attempts = data[TAG_METADATA_RETRIES]
+        try:
+            data = Tlv.parse_dict(
+                self.protocol.send_apdu(0, INS_GET_METADATA, 0, p2)
+            )
+        except ApduError as e:
+            if e.sw in (SW.INVALID_INSTRUCTION, 0x6A86):
+                raise NotSupportedError("PIN/PUK metadata not supported")
+            raise
+        attempts = data.get(TAG_METADATA_RETRIES)
+        if attempts is None:
+            attempts = b"\x00\x00"
+        elif len(attempts) < 2:
+            # Some implementations only report the remaining retries.
+            # Pad with zeros so indexing is safe.
+            attempts = attempts.ljust(2, b"\x00")
         return PinMetadata(
-            data[TAG_METADATA_IS_DEFAULT] != b"\0",
+            data.get(TAG_METADATA_IS_DEFAULT, b"\0") != b"\0",
             attempts[INDEX_RETRIES_TOTAL],
             attempts[INDEX_RETRIES_REMAINING],
         )
