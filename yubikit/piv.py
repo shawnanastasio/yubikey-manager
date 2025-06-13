@@ -1032,7 +1032,14 @@ class PivSession:
         slot = SLOT(slot)
         logger.debug(f"Getting metadata for slot {slot}")
         require_version(self.version, (5, 3, 0))
-        data = Tlv.parse_dict(self.protocol.send_apdu(0, INS_GET_METADATA, 0, slot))
+        try:
+            data = Tlv.parse_dict(
+                self.protocol.send_apdu(0, INS_GET_METADATA, 0, slot)
+            )
+        except ApduError as e:
+            if e.sw in (SW.INVALID_INSTRUCTION, 0x6A81, 0x6A86):
+                raise NotSupportedError("Slot metadata not supported")
+            raise
         if TAG_METADATA_ALGO not in data:
             # Some implementations return success for empty slots instead of the
             # REFERENCE_DATA_NOT_FOUND error used by YubiKeys.
