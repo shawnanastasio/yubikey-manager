@@ -1033,13 +1033,18 @@ class PivSession:
         logger.debug(f"Getting metadata for slot {slot}")
         require_version(self.version, (5, 3, 0))
         data = Tlv.parse_dict(self.protocol.send_apdu(0, INS_GET_METADATA, 0, slot))
-        policy = data[TAG_METADATA_POLICY]
+        if TAG_METADATA_ALGO not in data:
+            # Some implementations return success for empty slots instead of the
+            # REFERENCE_DATA_NOT_FOUND error used by YubiKeys.
+            raise ApduError(b"", SW.REFERENCE_DATA_NOT_FOUND)
+
+        policy = data.get(TAG_METADATA_POLICY, b"\x00\x01")
         return SlotMetadata(
             KEY_TYPE(data[TAG_METADATA_ALGO][0]),
             PIN_POLICY(policy[INDEX_PIN_POLICY]),
             TOUCH_POLICY(policy[INDEX_TOUCH_POLICY]),
-            data[TAG_METADATA_ORIGIN][0] == ORIGIN_GENERATED,
-            data[TAG_METADATA_PUBLIC_KEY],
+            data.get(TAG_METADATA_ORIGIN, b"\0")[0] == ORIGIN_GENERATED,
+            data.get(TAG_METADATA_PUBLIC_KEY, b""),
         )
 
     def get_bio_metadata(self) -> BioMetadata:
